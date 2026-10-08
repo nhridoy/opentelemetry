@@ -1,16 +1,18 @@
-# OpenTelemetry observability stack: Collector + Tempo + Prometheus + Loki + Grafana.
+# Observability stack: OTel Collector + Tempo + Prometheus + Loki + Pyroscope + Grafana.
 # Runs on its own server, separate from the Django server. Copy this file and
 # the observability/ folder there, put OTLP_USERNAME / OTLP_PASSWORD /
-# GRAFANA_ADMIN_PASSWORD / GRAFANA_ROOT_URL in a .env next to it, then:
+# PYROSCOPE_USERNAME / PYROSCOPE_PASSWORD / GRAFANA_ADMIN_PASSWORD /
+# GRAFANA_ROOT_URL in a .env next to it, then:
 #
 #   docker compose -f docker-compose.observability.yml up -d
 #
-# Deployed with Dokploy: no host ports are published. Add two domains in the
-# Dokploy UI (HTTPS on): otel.<domain> → otel-collector:4318 and
-# grafana.<domain> → grafana:3000.
+# Deployed with Dokploy: no host ports are published. Add domains in the
+# Dokploy UI (HTTPS on): otel.<domain> → otel-collector:4318,
+# profiles.<domain> → pyroscope-auth:80 and grafana.<domain> → grafana:3000.
 # Django server .env:
 #   OTEL_EXPORTER_OTLP_ENDPOINT=https://otel.<domain>
 #   OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic%20<base64 of user:password>
+#   PYROSCOPE_SERVER_ADDRESS=https://profiles.<domain> + PYROSCOPE_USERNAME/PASSWORD
 # Design: docs/superpowers/plans/2026-10-07-opentelemetry.md
 
 services:
@@ -32,16 +34,17 @@ services:
       - prometheus
       - loki
 
-  # Tempo and Loki run as uid 10001; give them their data volumes. Uses busybox
-  # because their images are distroless (no chown inside).
+  # Tempo, Loki and Pyroscope run as uid 10001; give them their data volumes.
+  # Uses busybox because their images are distroless (no chown inside).
   volume-init:
     image: busybox:1.37
     restart: "no"  # one-shot: chown then exit; never restart it
     user: root
-    entrypoint: ["chown", "10001:10001", "/var/tempo", "/loki"]
+    entrypoint: ["chown", "10001:10001", "/var/tempo", "/loki", "/pyroscope"]
     volumes:
       - tempo_data:/var/tempo
       - loki_data:/loki
+      - pyroscope_data:/pyroscope
 
   tempo:
     image: grafana/tempo:2.10.8
@@ -66,6 +69,41 @@ services:
     depends_on:
       volume-init:
         condition: service_completed_successfully
+
+  # Continuous profiling. v1 storage (single binary); Pyroscope 2's default v2
+  # storage needs its metastore cluster. Not exposed: pyroscope-auth fronts it.
+  pyroscope:
+    image: grafana/pyroscope:2.1.2
+    container_name: ${CONTAINER_PREFIX:-lumicore}-pyroscope
+    restart: unless-stopped
+    command:
+      - -architecture.storage=v1
+      - -write-path=ingester
+      - -pyroscopedb.data-path=/pyroscope/data
+      - -storage.filesystem.dir=/pyroscope/shared
+      - -compactor.data-dir=/pyroscope/compactor
+      - -self-profiling.disable-push=true
+      - -usage-stats.enabled=false
+    volumes:
+      - pyroscope_data:/pyroscope
+    depends_on:
+      volume-init:
+        condition: service_completed_successfully
+
+  # Pyroscope has no login: this nginx checks basic auth, then proxies to it.
+  # profiles.<domain> → this service, container port 80.
+  pyroscope-auth:
+    image: nginx:1.29-alpine
+    container_name: ${CONTAINER_PREFIX:-lumicore}-pyroscope-auth
+    restart: unless-stopped
+    environment:
+      # Rendered into the htpasswd file at start; refuse to start without them.
+      PYROSCOPE_USERNAME: ${PYROSCOPE_USERNAME:?set PYROSCOPE_USERNAME in .env}
+      PYROSCOPE_PASSWORD: ${PYROSCOPE_PASSWORD:?set PYROSCOPE_PASSWORD in .env}
+    volumes:
+      - ./observability/pyroscope-auth:/etc/nginx/templates:ro
+    depends_on:
+      - pyroscope
 
   prometheus:
     image: prom/prometheus:v3.15.0
@@ -100,9 +138,11 @@ services:
       - tempo
       - prometheus
       - loki
+      - pyroscope
 
 volumes:
   tempo_data:
   prometheus_data:
   grafana_data:
   loki_data:
+  pyroscope_data:

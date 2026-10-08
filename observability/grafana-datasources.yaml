@@ -1,5 +1,5 @@
 # Grafana datasource provisioning: Prometheus (metrics), Tempo (traces),
-# Loki (logs), with trace <-> log links.
+# Loki (logs), with trace <-> log links, and Pyroscope (profiles).
 apiVersion: 1
 
 datasources:
@@ -36,3 +36,10 @@ datasources:
           matcherRegex: trace_id
           url: "${__value.raw}"
           datasourceUid: tempo
+
+  # Internal address: Grafana reaches Pyroscope directly, not via the auth proxy.
+  - name: Pyroscope
+    uid: pyroscope
+    type: grafana-pyroscope-datasource
+    access: proxy
+    url: http://pyroscope:4040
