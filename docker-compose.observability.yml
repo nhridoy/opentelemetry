@@ -1,0 +1,81 @@
+# OpenTelemetry observability stack: Collector + Tempo + Prometheus + Grafana.
+# Overlay on top of the backend compose file so the app reaches the Collector
+# on the same network:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d
+#   (prod: -f docker-compose.prod.yml; copy observability/ next to it on the server)
+#
+# Then in .env:  OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+# Only Grafana is reachable, on 127.0.0.1:3000 → put it behind nginx + TLS.
+# Design: docs/superpowers/plans/2026-10-07-opentelemetry.md
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.162.0
+    container_name: ${CONTAINER_PREFIX:-lumicore}-otel-collector
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./observability/otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    depends_on:
+      - tempo
+      - prometheus
+
+  # Tempo runs as uid 10001; give it the data volume (official Tempo example).
+  tempo-init:
+    image: &tempo_image grafana/tempo:2.10.8
+    user: root
+    entrypoint: ["chown", "10001:10001", "/var/tempo"]
+    volumes:
+      - tempo_data:/var/tempo
+
+  tempo:
+    image: *tempo_image
+    container_name: ${CONTAINER_PREFIX:-lumicore}-tempo
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./observability/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo_data:/var/tempo
+    depends_on:
+      tempo-init:
+        condition: service_completed_successfully
+
+  prometheus:
+    image: prom/prometheus:v3.15.0
+    container_name: ${CONTAINER_PREFIX:-lumicore}-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --web.enable-otlp-receiver
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+
+  grafana:
+    image: grafana/grafana:13.0.10
+    container_name: ${CONTAINER_PREFIX:-lumicore}-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      # Refuse to start without a real password (same fail-closed rule as Flower).
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3000}
+    ports:
+      # Localhost only; never 0.0.0.0 (Docker bypasses ufw). Expose via nginx + TLS.
+      - "127.0.0.1:${GRAFANA_HOST_PORT:-3000}:3000"
+    volumes:
+      - ./observability/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - tempo
+      - prometheus
+
+volumes:
+  tempo_data:
+  prometheus_data:
+  grafana_data:

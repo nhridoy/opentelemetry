@@ -1,0 +1,61 @@
+# OpenTelemetry Collector: receives OTLP from backend / Celery worker / beat,
+# drops noise, strips query strings, forwards traces to Tempo and metrics to
+# Prometheus. Design: docs/superpowers/plans/2026-10-07-opentelemetry.md §5.
+# Verified locally against otelcol-contrib 0.162.0 (filter drops root redis /
+# set_config spans, keeps child spans; query strings stripped).
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 400
+    spike_limit_mib: 100
+
+  # Kombu's broker polling and new-connection setup create parentless
+  # single-span traces in the worker; drop them (spans inside real traces stay).
+  filter/noise:
+    error_mode: ignore
+    traces:
+      span:
+        - 'IsRootSpan() and (attributes["db.system"] == "redis" or attributes["db.system.name"] == "redis")'
+        - 'IsRootSpan() and (IsMatch(attributes["db.statement"], "set_config") or IsMatch(attributes["db.query.text"], "set_config"))'
+
+  # Query strings can carry secrets (Instagram token calls, invite/booking
+  # tokens, S3 signatures). http.route keeps endpoint grouping.
+  transform/strip-query:
+    error_mode: ignore
+    trace_statements:
+      - context: span
+        statements:
+          - 'replace_pattern(span.attributes["http.url"], "\\?.*", "")'
+          - 'replace_pattern(span.attributes["url.full"], "\\?.*", "")'
+          - 'replace_pattern(span.attributes["http.target"], "\\?.*", "")'
+          - 'delete_key(span.attributes, "url.query")'
+
+  batch: {}
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+  otlphttp/prometheus:
+    endpoint: http://prometheus:9090/api/v1/otlp
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, filter/noise, transform/strip-query, batch]
+      exporters: [otlp/tempo]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/prometheus]

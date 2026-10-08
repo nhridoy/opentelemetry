@@ -1,0 +1,12 @@
+# Prometheus: metrics arrive via OTLP from the Collector
+# (--web.enable-otlp-receiver), so no scrape jobs are needed for the app.
+# Celery metrics: add a scrape job for Flower's /metrics once the Flower
+# service is deployed alongside this stack.
+global:
+  scrape_interval: 30s
+
+otlp:
+  # Keep service.name / deployment.environment as labels on every metric.
+  promote_resource_attributes:
+    - service.name
+    - deployment.environment
