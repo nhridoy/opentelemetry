@@ -1,12 +1,15 @@
 # OpenTelemetry observability stack: Collector + Tempo + Prometheus + Grafana.
-# Overlay on top of the backend compose file so the app reaches the Collector
-# on the same network:
+# Runs on its own server, separate from the Django server. Copy this file and
+# the observability/ folder there, put OTLP_USERNAME / OTLP_PASSWORD /
+# GRAFANA_ADMIN_PASSWORD / GRAFANA_ROOT_URL in a .env next to it, then:
 #
-#   docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d
-#   (prod: -f docker-compose.prod.yml; copy observability/ next to it on the server)
+#   docker compose -f docker-compose.observability.yml up -d
 #
-# Then in .env:  OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
-# Only Grafana is reachable, on 127.0.0.1:3000 → put it behind nginx + TLS.
+# Both published ports are localhost-only (Docker bypasses ufw); nginx + TLS on
+# this server exposes them: otel.<domain> → 4318, grafana.<domain> → 3000.
+# Django server .env:
+#   OTEL_EXPORTER_OTLP_ENDPOINT=https://otel.<domain>
+#   OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic%20<base64 of user:password>
 # Design: docs/superpowers/plans/2026-10-07-opentelemetry.md
 
 services:
@@ -15,6 +18,12 @@ services:
     container_name: ${CONTAINER_PREFIX:-lumicore}-otel-collector
     restart: unless-stopped
     command: ["--config=/etc/otelcol/config.yaml"]
+    environment:
+      # OTLP ingest credentials (basic auth); refuse to start without them.
+      OTLP_USERNAME: ${OTLP_USERNAME:?set OTLP_USERNAME in .env}
+      OTLP_PASSWORD: ${OTLP_PASSWORD:?set OTLP_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:4318:4318"
     volumes:
       - ./observability/otel-collector.yaml:/etc/otelcol/config.yaml:ro
     depends_on:

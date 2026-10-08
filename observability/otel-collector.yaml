@@ -4,11 +4,21 @@
 # Verified locally against otelcol-contrib 0.162.0 (filter drops root redis /
 # set_config spans, keeps child spans; query strings stripped).
 
+extensions:
+  # The app runs on another server and sends OTLP over the internet (behind
+  # nginx + TLS), so ingest requires a username/password.
+  basicauth/otlp:
+    htpasswd:
+      inline: |
+        ${env:OTLP_USERNAME}:${env:OTLP_PASSWORD}
+
 receivers:
   otlp:
     protocols:
       http:
         endpoint: 0.0.0.0:4318
+        auth:
+          authenticator: basicauth/otlp
 
 processors:
   memory_limiter:
@@ -50,6 +60,7 @@ exporters:
       insecure: true
 
 service:
+  extensions: [basicauth/otlp]
   pipelines:
     traces:
       receivers: [otlp]
