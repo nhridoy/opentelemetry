@@ -5,8 +5,9 @@
 #
 #   docker compose -f docker-compose.observability.yml up -d
 #
-# Both published ports are localhost-only (Docker bypasses ufw); nginx + TLS on
-# this server exposes them: otel.<domain> → 4318, grafana.<domain> → 3000.
+# Deployed with Dokploy: no host ports are published. Add two domains in the
+# Dokploy UI (HTTPS on): otel.<domain> → otel-collector:4318 and
+# grafana.<domain> → grafana:3000.
 # Django server .env:
 #   OTEL_EXPORTER_OTLP_ENDPOINT=https://otel.<domain>
 #   OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic%20<base64 of user:password>
@@ -22,8 +23,8 @@ services:
       # OTLP ingest credentials (basic auth); refuse to start without them.
       OTLP_USERNAME: ${OTLP_USERNAME:?set OTLP_USERNAME in .env}
       OTLP_PASSWORD: ${OTLP_PASSWORD:?set OTLP_PASSWORD in .env}
-    ports:
-      - "127.0.0.1:4318:4318"
+    # No published port: the reverse proxy (Dokploy/Traefik domain) reaches it on
+    # the Docker network. otel.<domain> → this service, container port 4318.
     volumes:
       - ./observability/otel-collector.yaml:/etc/otelcol/config.yaml:ro
     depends_on:
@@ -75,9 +76,8 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3000}
-    ports:
-      # Localhost only; never 0.0.0.0 (Docker bypasses ufw). Expose via nginx + TLS.
-      - "127.0.0.1:${GRAFANA_HOST_PORT:-3000}:3000"
+    # No published port (host 3000 is Dokploy's own UI): grafana.<domain> →
+    # this service, container port 3000, via the Dokploy/Traefik domain.
     volumes:
       - ./observability/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
       - grafana_data:/var/lib/grafana
