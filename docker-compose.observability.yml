@@ -30,16 +30,17 @@ services:
       - tempo
       - prometheus
 
-  # Tempo runs as uid 10001; give it the data volume (official Tempo example).
+  # Tempo runs as uid 10001; give it the data volume. Uses busybox because the
+  # Tempo image is distroless (no chown inside).
   tempo-init:
-    image: &tempo_image grafana/tempo:2.10.8
+    image: busybox:1.37
     user: root
     entrypoint: ["chown", "10001:10001", "/var/tempo"]
     volumes:
       - tempo_data:/var/tempo
 
   tempo:
-    image: *tempo_image
+    image: grafana/tempo:2.10.8
     container_name: ${CONTAINER_PREFIX:-lumicore}-tempo
     restart: unless-stopped
     command: ["-config.file=/etc/tempo.yaml"]
