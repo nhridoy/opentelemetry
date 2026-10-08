@@ -22,3 +22,21 @@ storage:
 compactor:
   compaction:
     block_retention: 168h  # 7 days
+
+# TraceQL metrics (rate / errors / duration), used by Grafana's Traces
+# Drilldown. Without this the query fails with "error finding generators:
+# empty ring". local-blocks only; no span-metrics remote write.
+metrics_generator:
+  storage:
+    path: /var/tempo/generator/wal
+  traces_storage:
+    path: /var/tempo/generator/traces
+  processor:
+    local_blocks:
+      filter_server_spans: false
+      flush_to_storage: true
+
+overrides:
+  defaults:
+    metrics_generator:
+      processors: [local-blocks]
