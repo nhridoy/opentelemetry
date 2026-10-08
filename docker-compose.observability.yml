@@ -1,4 +1,4 @@
-# OpenTelemetry observability stack: Collector + Tempo + Prometheus + Grafana.
+# OpenTelemetry observability stack: Collector + Tempo + Prometheus + Loki + Grafana.
 # Runs on its own server, separate from the Django server. Copy this file and
 # the observability/ folder there, put OTLP_USERNAME / OTLP_PASSWORD /
 # GRAFANA_ADMIN_PASSWORD / GRAFANA_ROOT_URL in a .env next to it, then:
@@ -30,16 +30,18 @@ services:
     depends_on:
       - tempo
       - prometheus
+      - loki
 
-  # Tempo runs as uid 10001; give it the data volume. Uses busybox because the
-  # Tempo image is distroless (no chown inside).
-  tempo-init:
+  # Tempo and Loki run as uid 10001; give them their data volumes. Uses busybox
+  # because their images are distroless (no chown inside).
+  volume-init:
     image: busybox:1.37
     restart: "no"  # one-shot: chown then exit; never restart it
     user: root
-    entrypoint: ["chown", "10001:10001", "/var/tempo"]
+    entrypoint: ["chown", "10001:10001", "/var/tempo", "/loki"]
     volumes:
       - tempo_data:/var/tempo
+      - loki_data:/loki
 
   tempo:
     image: grafana/tempo:2.10.8
@@ -50,7 +52,19 @@ services:
       - ./observability/tempo.yaml:/etc/tempo.yaml:ro
       - tempo_data:/var/tempo
     depends_on:
-      tempo-init:
+      volume-init:
+        condition: service_completed_successfully
+
+  loki:
+    image: grafana/loki:3.7.8
+    container_name: ${CONTAINER_PREFIX:-lumicore}-loki
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/config.yaml"]
+    volumes:
+      - ./observability/loki.yaml:/etc/loki/config.yaml:ro
+      - loki_data:/loki
+    depends_on:
+      volume-init:
         condition: service_completed_successfully
 
   prometheus:
@@ -85,8 +99,10 @@ services:
     depends_on:
       - tempo
       - prometheus
+      - loki
 
 volumes:
   tempo_data:
   prometheus_data:
   grafana_data:
+  loki_data:

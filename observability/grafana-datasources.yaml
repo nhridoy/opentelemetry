@@ -1,4 +1,5 @@
-# Grafana datasource provisioning: Tempo (traces) + Prometheus (metrics).
+# Grafana datasource provisioning: Prometheus (metrics), Tempo (traces),
+# Loki (logs), with trace <-> log links.
 apiVersion: 1
 
 datasources:
@@ -14,3 +15,24 @@ datasources:
     type: tempo
     access: proxy
     url: http://tempo:3200
+    jsonData:
+      # "Logs for this span" button on traces.
+      tracesToLogsV2:
+        datasourceUid: loki
+        filterByTraceID: true
+        spanStartTimeShift: -5m
+        spanEndTimeShift: 5m
+
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      # Clickable trace_id on log lines → opens the trace in Tempo.
+      derivedFields:
+        - name: TraceID
+          matcherType: label
+          matcherRegex: trace_id
+          url: "${__value.raw}"
+          datasourceUid: tempo
